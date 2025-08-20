@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Rakan Tracker</title>
+<meta name="theme-color" content="#111827"/>
+<style>
+*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b1220;color:#e5e7eb}
+header{padding:16px 20px;border-bottom:1px solid #1f2937;background:#0f172a;position:sticky;top:0;z-index:10}
+h1{margin:0;font-size:20px}
+h2{margin:0 0 8px 0;font-size:16px}
+.hint{color:#9ca3af;margin:8px 0 0}
+.controls{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.controls select,.controls button{padding:8px 10px;border-radius:8px;border:1px solid #374151;background:#111827;color:#e5e7eb}
+.controls .primary{background:#2563eb;border-color:#2563eb}
+main{padding:16px;max-width:1200px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px}
+.card{background:#0f172a;border:1px solid #1f2937;border-radius:12px;padding:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #374151;background:#111827;color:#e5e7eb}
+input.compact{padding:6px}
+textarea{min-height:90px}
+button{padding:10px 12px;border-radius:10px;border:1px solid #374151;background:#111827;color:#e5e7eb;cursor:pointer}
+button.primary{background:#2563eb;border-color:#2563eb}
+button.danger{background:#991b1b;border-color:#991b1b}
+.mt8{margin-top:8px}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap}
+.scroll{overflow:auto;max-height:50vh;border:1px solid #1f2937;border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:860px}
+th,td{padding:8px 10px;border-bottom:1px solid #1f2937;font-size:14px}
+td.right{text-align:right}
+.badge{padding:2px 6px;border-radius:6px;background:#1f2937;color:#9ca3af;font-size:12px}
+.tag{padding:2px 6px;border-radius:6px}
+.tag.g{background:#052e16;color:#34d399}
+.tag.r{background:#3f0c0c;color:#fca5a5}
+.totals{display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap}
+.errors{margin-top:8px;color:#fca5a5;font-size:12px;white-space:pre-wrap}
+.file{display:inline-flex;align-items:center;gap:6px}
+.file input{display:none}
+footer{padding:16px;text-align:center;color:#9ca3af}
+.inline{display:inline-flex;gap:6px;align-items:center}
+input.price-edit{width:110px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<header>
+  <h1>Rakan Tracker</h1>
+  <div class="controls">
+    <label>Base currency:
+      <select id="baseCurrency">
+        <option value="SAR">SAR</option>
+        <option value="USD">USD</option>
+      </select>
+    </label>
+    <button id="refreshBtn" class="primary">Refresh Prices</button>
+    <span id="fxInfo" style="opacity:.7"></span>
+  </div>
+  <p class="hint">Add tickers (e.g., <code>7010.SR</code>, <code>2222.SR</code>, <code>SPUS</code>) or manual assets. If a quote fails, you can set the price manually per row.</p>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card">
+      <h2>Add Yahoo asset</h2>
+      <div class="row">
+        <input id="y_ticker" placeholder="Ticker (e.g., 7010.SR, 2222.SR, SPUS)" />
+      </div>
+      <div class="row">
+        <input id="y_qty" type="number" step="0.0001" placeholder="Quantity" />
+        <input id="y_avg" type="number" step="0.0001" placeholder="Avg. buy (listing ccy)" />
+      </div>
+      <button id="addYahoo" class="primary">Add</button>
+      <details class="mt8">
+        <summary>Batch add</summary>
+        <textarea id="batchTickers" placeholder="7010.SR, 2222.SR&#10;SPUS"></textarea>
+        <div class="row">
+          <input id="batchQty" type="number" step="0.0001" value="0" />
+          <input id="batchAvg" type="number" step="0.0001" value="0" />
+        </div>
+        <button id="addBatch">Add batch</button>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Add manual asset</h2>
+      <div class="row">
+        <input id="m_name" placeholder="Name (e.g., SNB Sunbullah)" />
+      </div>
+      <div class="row">
+        <input id="m_value" type="number" step="0.01" placeholder="Current value" />
+        <select id="m_ccy">
+          <option value="SAR">SAR</option>
+          <option value="USD">USD</option>
+        </select>
+      </div>
+      <button id="addManual" class="primary">Add</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <h2>Your portfolio</h2>
+      <div class="right inline">
+        <button id="exportBtn">Export</button>
+        <label class="file">
+          Import <input type="file" id="importFile" accept=".json" />
+        </label>
+        <button id="clearAll" class="danger">Clear All</button>
+      </div>
+    </div>
+    <div class="scroll">
+      <table id="portfolioTable">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Name / Ticker</th>
+            <th>Ccy</th>
+            <th>Qty</th>
+            <th>Last</th>
+            <th>Market Value (base)</th>
+            <th>Cost (base)</th>
+            <th>P/L</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="totals">
+      <div id="totalValue"></div>
+    </div>
+    <canvas id="allocChart" height="140"></canvas>
+    <div id="errors" class="errors"></div>
+  </section>
+</main>
+
+<footer>
+  <small>Rakan Tracker • Data stored locally</small>
+</footer>
+
+<script>
+const LS_KEY = "rakan_tracker_portfolio_super_v1";
+const $ = sel => document.querySelector(sel);
+
+const state = { base:"SAR", holdings:[], quotes:{}, usdToSar:3.75 };
+
+function load(){ try{const raw=localStorage.getItem(LS_KEY); if(raw){const o=JSON.parse(raw); state.base=o.base||"SAR"; state.holdings=Array.isArray(o.holdings)?o.holdings:[]}}catch{}}
+function save(){ localStorage.setItem(LS_KEY, JSON.stringify({base:state.base, holdings:state.holdings})); }
+function uid(){ return Math.random().toString(36).slice(2)+Date.now().toString(36); }
+function convert(amount, from, base){
+  if(from===base) return amount;
+  if(base==="SAR"&&from==="USD") return amount*state.usdToSar;
+  if(base==="USD"&&from==="SAR") return amount/state.usdToSar;
+  return amount;
+}
+
+// ---- Robust Yahoo with triple fallback (direct -> AllOrigins -> r.jina.ai) ----
+async function fetchJSON(url){
+  // 1) direct
+  try{
+    const r=await fetch(url);
+    if(r.ok) return await r.json();
+    throw new Error("HTTP "+r.status);
+  }catch(_){}
+  // 2) allorigins
+  try{
+    const r=await fetch("https://api.allorigins.win/raw?url="+encodeURIComponent(url));
+    if(!r.ok) throw new Error("Proxy "+r.status);
+    const t=await r.text();
+    return JSON.parse(t);
+  }catch(_){}
+  // 3) r.jina.ai (CORS-friendly text proxy)
+  const jina = "https://r.jina.ai/http://" + url.replace(/^https?:\/\//,"");
+  const r3 = await fetch(jina);
+  const t3 = await r3.text();
+  try { return JSON.parse(t3); } catch { throw new Error("All fallbacks failed"); }
+}
+
+async function fetchQuotes(){
+  const tickers=[...new Set(state.holdings.filter(h=>h.type==="yahoo").map(h=>(h.ticker||"").toUpperCase()).filter(Boolean))];
+  state.quotes={}; let errors=[];
+
+  async function fetchOneTicker(sym){
+    const urls=[
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(sym)}`,
+      `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(sym)}`,
+      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=price`
+    ];
+    for(const u of urls){
+      try{
+        const data=await fetchJSON(u);
+        const list=data?.quoteResponse?.result;
+        if(Array.isArray(list) && list.length){
+          const q=list[0];
+          const price=q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? null;
+          const ccy=(q.currency || (sym.endsWith(".SR")?"SAR":"USD")).toUpperCase();
+          const name=q.shortName || q.longName || sym;
+          state.quotes[sym]={name,price,ccy};
+          return true;
+        }
+        const p=data?.quoteSummary?.result?.[0]?.price;
+        if(p){
+          const price=p.regularMarketPrice?.raw ?? p.postMarketPrice?.raw ?? null;
+          const ccy=(p.currency || (sym.endsWith(".SR")?"SAR":"USD")).toUpperCase();
+          const name=p.shortName || p.longName || sym;
+          state.quotes[sym]={name,price,ccy};
+          return true;
+        }
+      }catch(_){}
+    }
+    return false;
+  }
+
+  // batch via query1 then backfill missing individually
+  for(let i=0;i<tickers.length;i+=50){
+    const group=tickers.slice(i,i+50);
+    try{
+      const data=await fetchJSON(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(group.join(","))}`);
+      const list=data?.quoteResponse?.result || [];
+      const returned=new Set();
+      for(const q of list){
+        const sym=(q.symbol||"").toUpperCase();
+        const price=q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? null;
+        const ccy=(q.currency || (sym.endsWith(".SR")?"SAR":"USD")).toUpperCase();
+        const name=q.shortName || q.longName || sym;
+        state.quotes[sym]={name,price,ccy};
+        returned.add(sym);
+      }
+      for(const t of group){
+        if(!returned.has(t)){
+          const ok=await fetchOneTicker(t);
+          if(!ok) errors.push(`No quote for ${t}`);
+        }
+      }
+    }catch(e){
+      for(const t of group){
+        const ok=await fetchOneTicker(t);
+        if(!ok) errors.push(`No quote for ${t} — ${e.message||e}`);
+      }
+    }
+  }
+
+  // USD→SAR
+  try{
+    const fx=await fetchJSON("https://query1.finance.yahoo.com/v7/finance/quote?symbols=SAR=X");
+    const q=fx?.quoteResponse?.result?.[0];
+    const p=q?.regularMarketPrice ?? q?.postMarketPrice ?? null;
+    if(p && p>0) state.usdToSar=p;
+  }catch{}
+
+  return errors;
+}
+// -----------------------------------------------------------------------------
+
+function render(){
+  $("#baseCurrency").value=state.base;
+  $("#fxInfo").textContent=`USD→SAR ≈ ${state.usdToSar.toFixed(4)}`;
+  const tbody=$("#portfolioTable tbody"); tbody.innerHTML="";
+  let total=0; const alloc={"Stock/ETF":0,"Manual":0};
+  for(const h of state.holdings){
+    const tr=document.createElement("tr");
+    if(h.type==="yahoo"){
+      const q=state.quotes[h.ticker.toUpperCase()]||{};
+      const priceEdit = (q.price==null) ? `<span class="inline"><input class="compact price-edit" id="p_${h.id}" type="number" step="0.0001" placeholder="Set price"><button onclick="setManualPrice('${h.id}')">Set</button></span>` : "";
+      const price=Number(q.price??(h._manualPrice||0));
+      const ccy=q.ccy||(h.ticker.endsWith(".SR")?"SAR":"USD");
+      const qty=Number(h.qty||0), avg=Number(h.avg||0);
+      const mvBase=convert(price*qty, ccy, state.base);
+      const costBase=convert(avg*qty, ccy, state.base);
+      const pnl=mvBase-costBase; total+=mvBase; alloc["Stock/ETF"]+=mvBase;
+      tr.innerHTML=`
+        <td><span class="badge">Yahoo</span></td>
+        <td>${(q.name||h.ticker)} <div class="badge">${h.ticker}</div></td>
+        <td>${ccy}</td>
+        <td class="right">${qty.toLocaleString()}</td>
+        <td class="right">${(q.price!=null? q.price.toLocaleString(): "N/A")} ${priceEdit}</td>
+        <td class="right">${mvBase.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+        <td class="right">${costBase.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+        <td class="right"><span class="tag ${pnl>=0?'g':'r'}">${pnl.toLocaleString(undefined,{maximumFractionDigits:2})}</span></td>
+        <td class="right">
+          <button onclick="editAsset('${h.id}')">✏️</button>
+          <button onclick="delAsset('${h.id}')">🗑️</button>
+        </td>`;
+    }else{
+      const mvBase=convert(Number(h.value||0), h.ccy||"SAR", state.base); total+=mvBase; alloc["Manual"]+=mvBase;
+      tr.innerHTML=`
+        <td><span class="badge">Manual</span></td>
+        <td>${h.name||"Manual"}</td>
+        <td>${h.ccy||"SAR"}</td>
+        <td class="right">-</td>
+        <td class="right">-</td>
+        <td class="right">${mvBase.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+        <td class="right">-</td>
+        <td class="right"><span class="badge">—</span></td>
+        <td class="right">
+          <button onclick="editAsset('${h.id}')">✏️</button>
+          <button onclick="delAsset('${h.id}')">🗑️</button>
+        </td>`;
+    }
+    tbody.appendChild(tr);
+  }
+  $("#totalValue").textContent=`Total value (${state.base}): ${total.toLocaleString(undefined,{maximumFractionDigits:2})}`;
+  drawAllocChart(alloc);
+}
+let allocChart;
+function drawAllocChart(alloc){
+  const ctx=$("#allocChart").getContext("2d");
+  const labels=Object.keys(alloc); const data=Object.values(alloc);
+  if(allocChart) allocChart.destroy();
+  allocChart=new Chart(ctx,{type:"pie",data:{labels,datasets:[{data}]},
+    options:{plugins:{legend:{labels:{color:"#e5e7eb"}}}}});
+}
+function addYahoo(){
+  const t=$("#y_ticker").value.trim().toUpperCase();
+  const qty=Number($("#y_qty").value||0); const avg=Number($("#y_avg").value||0);
+  if(!t){ alert("Please enter a ticker"); return; }
+  state.holdings.push({id:uid(), type:"yahoo", ticker:t, qty, avg});
+  save(); $("#y_ticker").value=""; $("#y_qty").value=""; $("#y_avg").value="";
+  refresh();
+}
+function addBatch(){
+  const txt=$("#batchTickers").value.trim(); if(!txt) return;
+  const qty=Number($("#batchQty").value||0); const avg=Number($("#batchAvg").value||0);
+  const parts=txt.replace(/\n/g,",").split(",").map(s=>s.trim().toUpperCase()).filter(Boolean);
+  for(const p of parts){ state.holdings.push({id:uid(), type:"yahoo", ticker:p, qty, avg}); }
+  save(); $("#batchTickers").value=""; refresh();
+}
+function addManual(){
+  const name=$("#m_name").value.trim(); const value=Number($("#m_value").value||0); const ccy=$("#m_ccy").value;
+  if(!name){ alert("Please enter a name"); return; }
+  state.holdings.push({id:uid(), type:"manual", name, value, ccy});
+  save(); $("#m_name").value=""; $("#m_value").value="";
+  refresh();
+}
+function delAsset(id){
+  const idx=state.holdings.findIndex(h=>h.id===id); if(idx<0) return;
+  if(confirm("Delete this asset?")){ state.holdings.splice(idx,1); save(); render(); }
+}
+function editAsset(id){
+  const idx=state.holdings.findIndex(h=>h.id===id); if(idx<0) return;
+  const h=state.holdings[idx];
+  if(h.type==="yahoo"){
+    const t=prompt("Ticker", h.ticker); if(!t) return;
+    const q=Number(prompt("Quantity", h.qty??0)||0);
+    const a=Number(prompt("Avg. buy (listing ccy)", h.avg??0)||0);
+    h.ticker=t.toUpperCase(); h.qty=q; h.avg=a;
+  }else{
+    const n=prompt("Name", h.name||"Manual"); if(!n) return;
+    const v=Number(prompt("Current value", h.value??0)||0);
+    const c=(prompt("Currency (SAR or USD)", h.ccy||"SAR")||"SAR").toUpperCase();
+    h.name=n; h.value=v; h.ccy=c;
+  }
+  save(); refresh();
+}
+function setManualPrice(id){
+  const h=state.holdings.find(x=>x.id===id);
+  const input=document.getElementById("p_"+id);
+  if(h && input){
+    const v = Number(input.value||0);
+    if(!(v>0)) { alert("Enter a valid price"); return; }
+    h._manualPrice = v; // local manual override
+    save(); render();
+  }
+}
+async function refresh(){
+  $("#errors").textContent="Loading prices...";
+  try{
+    const errs=await fetchQuotes();
+    $("#errors").textContent=errs.join("\\n");
+  }catch(e){
+    $("#errors").textContent="Fetch failed: "+(e.message||e);
+  }
+  render();
+}
+function exportData(){
+  const blob=new Blob([JSON.stringify({base:state.base, holdings:state.holdings}, null,2)], {type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="rakan_tracker_backup.json"; a.click();
+}
+function importData(file){
+  const r=new FileReader();
+  r.onload=e=>{ try{ const obj=JSON.parse(e.target.result);
+    if(Array.isArray(obj.holdings)) state.holdings=obj.holdings;
+    if(obj.base) state.base=obj.base; save(); refresh();
+  }catch{ alert("Invalid file"); } };
+  r.readAsText(file);
+}
+function init(){
+  load();
+  $("#baseCurrency").value=state.base;
+  $("#baseCurrency").addEventListener("change", e=>{ state.base=e.target.value; save(); render(); });
+  $("#addYahoo").addEventListener("click", addYahoo);
+  $("#addBatch").addEventListener("click", addBatch);
+  $("#addManual").addEventListener("click", addManual);
+  $("#exportBtn").addEventListener("click", exportData);
+  $("#importFile").addEventListener("change", e=> e.target.files[0] && importData(e.target.files[0]));
+  $("#clearAll").addEventListener("click", ()=>{ if(confirm("Clear all data?")){ state.holdings=[]; save(); render(); }});
+  $("#refreshBtn").addEventListener("click", refresh);
+  render();
+}
+window.addEventListener("load", init);
+</script>
+</body>
+</html>
