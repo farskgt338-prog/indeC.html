@@ -161,51 +161,141 @@ function convert(amount, from, base){
 }
 
 // Robust Yahoo fetch (with proxy fallback)
-async function fetchQuotes(){
-  const tickers=[...new Set(state.holdings.filter(h=>h.type==="yahoo").map(h=>(h.ticker||"").toUpperCase()).filter(Boolean))];
-  state.quotes={}; let errors=[];
+async function fetchQuotes() {
+  const tickers = [...new Set(
+    state.holdings
+      .filter(h => h.type === "yahoo")
+      .map(h => (h.ticker || "").toUpperCase())
+      .filter(Boolean)
+  )];
 
-  async function fetchJSON(url){
-    try{
-      const r1=await fetch(url);
-      if(r1.ok){ return await r1.json(); }
-      throw new Error(`HTTP ${r1.status}`);
-    }catch(e){
-      const prox="https://api.allorigins.win/raw?url="+encodeURIComponent(url);
-      const r2=await fetch(prox);
-      if(!r2.ok) throw new Error(`Proxy ${r2.status}`);
-      const text=await r2.text();
-      try{ return JSON.parse(text); }catch{ throw new Error("Invalid JSON"); }
-    }
-  }
+  state.quotes = {};
+  let errors = [];
 
-  for(let i=0;i<tickers.length;i+=50){
-    const group=tickers.slice(i,i+50);
-    const url=`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(group.join(","))}`;
-    try{
-      const data=await fetchJSON(url);
-      const list=(data&&data.quoteResponse&&data.quoteResponse.result)||[];
-      for(const q of list){
-        const sym=(q.symbol||"").toUpperCase();
-        const price=q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? null;
-        const ccy=(q.currency || (sym.endsWith(".SR")?"SAR":"USD")).toUpperCase();
-        const name=q.shortName || q.longName || sym;
-        state.quotes[sym]={name,price,ccy};
+  // ---------- CORS-friendly fetch (3 محاولات) ----------
+  async function fetchJSON(url) {
+    try {
+      const r1 = await fetch(url);
+      if (r1.ok) return await r1.json();
+      throw new Error("HTTP " + r1.status);
+    } catch {
+      try {
+        const r2 = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(url));
+        if (!r2.ok) throw new Error("Proxy " + r2.status);
+        return JSON.parse(await r2.text());
+      } catch {
+        const r3 = await fetch("https://r.jina.ai/http/" + url.replace(/^https?:\/\//, ""));
+        return JSON.parse(await r3.text());
       }
-      const returned=new Set(list.map(x=>(x.symbol||"").toUpperCase()));
-      for(const t of group){ if(!returned.has(t)) errors.push(`No quote for ${t}`); }
-    }catch(e){
-      errors.push(`Failed quotes: ${group.join(", ")} — ${e.message}`);
+    }
+  }
+  // -----------------------------------------------------
+
+  // يستكشف الرمز الصحيح من ياهو (autoc) مثل SPUS -> SPUS على PCX
+  async function resolveSymbol(sym) {
+    const u = `https://autoc.finance.yahoo.com/autoc?query=${encodeURIComponent(sym)}&region=US&lang=en-US`;
+    try {
+      const data = await fetchJSON(u);
+      const cand = (data?.ResultSet?.Result || []).find(
+        r => (r.symbol || "").toUpperCase() === sym || (r.name || "").toUpperCase() === sym
+      ) || (data?.ResultSet?.Result || [])[0];
+      // نرجّع الرمز المقترح أو نفس المدخل
+      return (cand?.symbol || sym).toUpperCase();
+    } catch {
+      return sym; // لو فشل، نكمل بالرمز الأصلي
     }
   }
 
-  try{
-    const fxUrl=`https://query1.finance.yahoo.com/v7/finance/quote?symbols=SAR=X`;
-    const data=await fetchJSON(fxUrl);
-    const q=data?.quoteResponse?.result?.[0];
-    const p=q?.regularMarketPrice ?? q?.postMarketPrice ?? null;
-    if(p&&p>0) state.usdToSar=p;
-  }catch{}
+  // محاولة واحدة لرمز واحد (v7 -> v6 -> quoteSummary)
+  async function fetchOneTicker(symRaw) {
+    const sym = await resolveSymbol(symRaw); // مهمّة لـ SPUS وغيره
+
+    const urls = [
+      // v7 (مع region/lang)
+      `https://query1.finance.yahoo.com/v7/finance/quote?lang=en-US&region=US&symbols=${encodeURIComponent(sym)}`,
+      `https://query2.finance.yahoo.com/v7/finance/quote?lang=en-US&region=US&symbols=${encodeURIComponent(sym)}`,
+      // v6
+      `https://query1.finance.yahoo.com/v6/finance/quote?lang=en-US&region=US&symbols=${encodeURIComponent(sym)}`,
+      // quoteSummary
+      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=price&lang=en-US&region=US`
+    ];
+
+    for (const u of urls) {
+      try {
+        const data = await fetchJSON(u);
+
+        // v7 / v6 result
+        const list = data?.quoteResponse?.result;
+        if (Array.isArray(list) && list.length) {
+          const q = list[0];
+          const price = q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? null;
+          const ccy = (q.currency || (sym.endsWith(".SR") ? "SAR" : "USD")).toUpperCase();
+          const name = q.shortName || q.longName || sym;
+          state.quotes[symRaw] = { name, price, ccy }; // اربط بالرمز الأصلي اللي أدخله المستخدم
+          return true;
+        }
+
+        // quoteSummary
+        const p = data?.quoteSummary?.result?.[0]?.price;
+        if (p) {
+          const price = p.regularMarketPrice?.raw ?? p.postMarketPrice?.raw ?? null;
+          const ccy = (p.currency || (sym.endsWith(".SR") ? "SAR" : "USD")).toUpperCase();
+          const name = p.shortName || p.longName || sym;
+          state.quotes[symRaw] = { name, price, ccy };
+          return true;
+        }
+      } catch {
+        // جرّب الرابط اللي بعده
+      }
+    }
+
+    return false;
+  }
+
+  // جلب جماعي أولًا (v7) ثم استكمال فرديًا بما فيهم SPUS
+  for (let i = 0; i < tickers.length; i += 50) {
+    const group = tickers.slice(i, i + 50);
+
+    try {
+      const url = `https://query1.finance.yahoo.com/v7/finance/quote?lang=en-US&region=US&symbols=${encodeURIComponent(group.join(","))}`;
+      const data = await fetchJSON(url);
+      const list = data?.quoteResponse?.result || [];
+      const returned = new Set();
+
+      for (const q of list) {
+        const sym = (q.symbol || "").toUpperCase();
+        const price = q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice ?? null;
+        const ccy = (q.currency || (sym.endsWith(".SR") ? "SAR" : "USD")).toUpperCase();
+        const name = q.shortName || q.longName || sym;
+
+        // خزنها على الرمز المُدخل إن وُجد ضمن المجموعة
+        const matchingInput = group.find(g => g === sym) || sym;
+        state.quotes[matchingInput] = { name, price, ccy };
+        returned.add(matchingInput);
+      }
+
+      for (const t of group) {
+        if (!returned.has(t)) {
+          const ok = await fetchOneTicker(t);
+          if (!ok) errors.push(`No quote for ${t}`);
+        }
+      }
+    } catch (e) {
+      // لو فشل كله، جرّب كل رمز فرديًا
+      for (const t of group) {
+        const ok = await fetchOneTicker(t);
+        if (!ok) errors.push(`No quote for ${t} — ${e.message || e}`);
+      }
+    }
+  }
+
+  // USD→SAR
+  try {
+    const fx = await fetchJSON(`https://query1.finance.yahoo.com/v7/finance/quote?lang=en-US&region=US&symbols=SAR=X`);
+    const q = fx?.quoteResponse?.result?.[0];
+    const p = q?.regularMarketPrice ?? q?.postMarketPrice ?? null;
+    if (p && p > 0) state.usdToSar = p;
+  } catch {}
 
   return errors;
 }
